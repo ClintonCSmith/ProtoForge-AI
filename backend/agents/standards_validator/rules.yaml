@@ -1,0 +1,36 @@
+rules:
+  - id: TITLE_BLOCK_COMPLETE
+    standard: ISO
+    severity: error
+    description: Title block must contain part name, material, scale, date, and tolerances.
+    check_type: vision
+  - id: PROJECTION_CONSISTENCY
+    standard: ISO
+    severity: error
+    description: All views must use first-angle projection.
+    check_type: vision
+  - id: DIMENSION_COMPLETENESS
+    standard: ISO
+    severity: warning
+    description: All visible outer and inner features must be clearly dimensioned.
+    check_type: vision
+  - id: BORDER_MARGINS_VALID
+    standard: ISO
+    severity: info
+    description: Drawing frame margins must conform to standard A4/A3 layout grids.
+    check_type: metadata
+  - id: METRIC_UNITS_ONLY
+    standard: ISO
+    severity: error
+    description: All dimensions must be specified in millimeters (SI metric system).
+    check_type: metadata
+  - id: LINE_WEIGHT_CONSISTENCY
+    standard: ISO
+    severity: warning
+    description: Visible outlines must be thick, centerlines and extension lines thin.
+    check_type: vision
+  - id: SCALE_RATIO_STANDARD
+    standard: ISO
+    severity: warning
+    description: Scales used must conform to standard ratios (e.g. 1:1, 1:2, 1:5, 2:1).
+    check_type: metadata

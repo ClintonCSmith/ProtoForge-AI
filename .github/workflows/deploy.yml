@@ -1,0 +1,152 @@
+name: ProtoForge AI CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+env:
+  AWS_REGION: us-east-1
+  ECR_FRONTEND_REPOSITORY: protoforge-frontend
+  ECR_BACKEND_REPOSITORY: protoforge-backend
+  EKS_CLUSTER_NAME: protoforge-cluster
+
+jobs:
+  # 1. Quality Gate (Lint & Test)
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Frontend Tests
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      - name: Install Frontend Dependencies
+        run: |
+          cd frontend
+          npm install
+
+      - name: Lint Frontend
+        run: |
+          cd frontend
+          npm run lint --if-present
+
+      # Backend Tests
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run Backend Syntax Verification
+        run: |
+          export PYTHONPATH=$PYTHONPATH:$(pwd)
+          python -c "import sys; sys.path.append('backend'); from backend.main import create_app; create_app()"
+
+  # 2. Build and Push Docker Images
+  build-and-push:
+    needs: test-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Build & Push Backend
+      - name: Build and Push Backend Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:latest ./backend
+          docker push $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:latest
+
+      # Build & Push Frontend
+      - name: Build and Push Frontend Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:latest ./frontend
+          docker push $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:latest
+
+  # 3. Infrastructure (Terraform Apply)
+  terraform:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Terraform Init and Apply
+        run: |
+          cd infrastructure/terraform
+          terraform init
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+
+  # 4. Deploy to Kubernetes (Helm Upgrade)
+  kubernetes-deploy:
+    needs: terraform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helper@v1
+        with:
+          version: 'v3.12.0'
+
+      - name: Update Kubeconfig for Amazon EKS
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Deploy Chart via Helm
+        run: |
+          helm upgrade --install protoforge ./infrastructure/helm \
+            --namespace production --create-namespace \
+            --set image.tag=${{ github.sha }}
