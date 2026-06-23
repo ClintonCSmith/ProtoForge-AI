@@ -11,13 +11,14 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
-      - api-gateway
+      - api
 
   # 2. REST API Gateway (FastAPI)
-  api-gateway:
+  api:
     build:
       context: ../backend
       dockerfile: Dockerfile
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     environment:
@@ -33,7 +34,7 @@ services:
 
   # 3. PostgreSQL Database
   db:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     environment:
       - POSTGRES_USER=protoforge
       - POSTGRES_PASSWORD=protoforge
@@ -62,168 +63,29 @@ services:
       - miniodata:/data
     command: server /data --console-address ":9001"
 
-  # 6. Celery Beat (Scheduler)
+  # 6. Celery Worker (Unified Agent Execution Process)
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A agents.core.celery_app worker -l info -c 4
+    environment:
+      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY=protoforge_access
+      - S3_SECRET_KEY=protoforge_secret
+    depends_on:
+      - redis
+      - db
+      - minio
+
+  # 7. Celery Beat (Scheduler for nightly Self-Evolution engine)
   celery-beat:
     build:
       context: ../backend
       dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app beat --loglevel=info
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 7. Agent 1: IntentParserAgent Worker
-  agent-intent-parser:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_intent_parser -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 8. Agent 2: DrawingGeneratorAgent Worker
-  agent-drawing-generator:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_drawing_generator -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 9. Agent 3: DrawingInterpreterAgent Worker
-  agent-drawing-interpreter:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_drawing_interpreter -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 10. Agent 4: ModelSynthesizerAgent Worker
-  agent-model-synthesizer:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_model_synthesizer -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 11. Agent 5: RenderEngineAgent Worker
-  agent-render-engine:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_render_engine -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 12. Agent 6: AnimationDirectorAgent Worker
-  agent-animation-director:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_animation_director -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 13. Agent 7: InteractiveXRAgent Worker
-  agent-interactive-xr:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_interactive_xr -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 14. Agent 8: SimulationAgent Worker
-  agent-simulation:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_simulation -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 15. Agent 9: StandardsValidatorAgent Worker
-  agent-standards-validator:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_standards_validator -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 16. Agent 10: BOMEstimatorAgent Worker
-  agent-bom-estimator:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_bom_estimator -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 17. Agent 11: OrchestratorAgent Worker
-  agent-orchestrator:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_orchestrator -c 1
-    environment:
-      - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - db
-
-  # 18. Agent 12: SelfEvolutionEngine Worker
-  agent-self-evolution:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    command: celery -A backend.core.celery_app.celery_app worker --loglevel=info -Q queue_self_evolution -c 1
+    command: celery -A agents.core.celery_app beat -l info
     environment:
       - DATABASE_URL=postgresql://protoforge:protoforge@db:5432/protoforge
       - REDIS_URL=redis://redis:6379/0
