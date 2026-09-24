@@ -1,12 +1,13 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import redis.asyncio as aioredis
 
 from backend.database import engine, Base
-from backend.middleware.auth import AuthMiddleware, PlanTierRateLimitMiddleware
+from backend.middleware.auth import RateLimitMiddleware, RequestLoggingMiddleware
 
-# Import routers
+# Import business routers only — agent sub-app stubs removed (all agents run as Celery tasks)
 from backend.routers.auth import router as auth_router
 from backend.routers.projects import router as projects_router
 from backend.routers.jobs import router as jobs_router
@@ -16,19 +17,6 @@ from backend.routers.viewer import router as viewer_router
 from backend.routers.assets import router as assets_router
 from backend.routers.external_api import router as external_api_router
 
-# Import Agent and Evolution Routers
-from backend.agents.intent_parser.agent import router as intent_parser_router
-from backend.agents.drawing_generator.agent import router as drawing_generator_router
-from backend.agents.drawing_interpreter.agent import router as drawing_interpreter_router
-from backend.agents.model_synthesizer.agent import router as model_synthesizer_router
-from backend.agents.render_engine.agent import router as render_engine_router
-from backend.agents.animation_director.agent import router as animation_director_router
-from backend.agents.interactive_xr.agent import router as interactive_xr_router
-from backend.agents.simulation.agent import router as simulation_router
-from backend.agents.standards_validator.agent import router as standards_validator_router
-from backend.agents.bom_estimator.agent import router as bom_estimator_router
-from backend.evolution.router import router as evolution_router
-
 def create_app() -> FastAPI:
     app = FastAPI(
         title="ProtoForge AI Backend",
@@ -36,10 +24,10 @@ def create_app() -> FastAPI:
         version="0.1.0"
     )
 
-    # CORS configuration - Allow Vercel origin and local testing origins
+    # CORS configuration
     origins = [
         "http://localhost:3000",
-        "https://protoforge-frontend.vercel.app",  # Mock Vercel deployment
+        "https://protoforge-frontend.vercel.app",
         "*"
     ]
     
@@ -52,10 +40,33 @@ def create_app() -> FastAPI:
     )
 
     # Mount Middlewares
-    app.add_middleware(PlanTierRateLimitMiddleware)
-    app.add_middleware(AuthMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    
+    # Global Exception Handler
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_server_error",
+                "message": "An unexpected error occurred. Our team has been notified.",
+                "request_id": request.headers.get("X-Request-ID", ""),
+            },
+        )
+    
+    @app.exception_handler(404)
+    async def not_found_handler(request: Request, exc):
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "not_found",
+                "message": f"The requested resource '{request.url.path}' was not found.",
+                "path": request.url.path,
+            },
+        )
 
-    # Mount Routers
+    # Mount business Routers only (all agent work is via Celery tasks + Orchestrator)
     app.include_router(auth_router)
     app.include_router(projects_router)
     app.include_router(jobs_router)
@@ -65,20 +76,7 @@ def create_app() -> FastAPI:
     app.include_router(assets_router)
     app.include_router(external_api_router)
 
-    # Mount Agent and Evolution Routers
-    app.include_router(intent_parser_router, prefix="/api/v1")
-    app.include_router(drawing_generator_router, prefix="/api/v1")
-    app.include_router(drawing_interpreter_router, prefix="/api/v1")
-    app.include_router(model_synthesizer_router, prefix="/api/v1")
-    app.include_router(render_engine_router, prefix="/api/v1")
-    app.include_router(animation_director_router, prefix="/api/v1")
-    app.include_router(interactive_xr_router, prefix="/api/v1")
-    app.include_router(simulation_router, prefix="/api/v1")
-    app.include_router(standards_validator_router, prefix="/api/v1")
-    app.include_router(bom_estimator_router, prefix="/api/v1")
-    app.include_router(evolution_router, prefix="/api/v1")
-
-    # Mount static assets folder for 3D model, render, and animation file serving
+    # Mount static assets folder
     from fastapi.staticfiles import StaticFiles
     assets_dir = "/home/team/shared/protoforge/backend/assets"
     os.makedirs(assets_dir, exist_ok=True)
@@ -87,23 +85,39 @@ def create_app() -> FastAPI:
     # Health Endpoint
     @app.get("/health", tags=["health"])
     async def health_check():
+        db_status = getattr(app.state, "db_status", "unknown")
+        redis_status = getattr(app.state, "redis_status", "unknown")
+        overall = "healthy" if (db_status == "connected" and redis_status == "connected") else "degraded"
         return {
-            "status": "healthy",
-            "database": "connected",
-            "redis": "connected",
+            "status": overall,
+            "database": db_status,
+            "redis": redis_status,
             "version": "0.1.0"
         }
 
     # Startup & Shutdown Events
     @app.on_event("startup")
     async def startup_event():
-        # Create database tables if they do not exist
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        
-        # Connect to Redis
+        app.state.db_status = "unavailable"
+        app.state.redis_status = "unavailable"
+        # Initialize schema / verify DB connectivity without crashing if the
+        # database is not reachable (e.g. local dev with no Postgres running).
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            app.state.db_status = "connected"
+        except Exception as e:  # noqa: BLE001
+            print(f"[startup] WARNING: database unavailable ({type(e).__name__}: {e}); running degraded")
+            app.state.db_status = "unavailable"
+        # Redis client (lazy connect — does not block startup).
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         app.state.redis = aioredis.from_url(redis_url)
+        try:
+            await app.state.redis.ping()
+            app.state.redis_status = "connected"
+        except Exception as e:  # noqa: BLE001
+            print(f"[startup] WARNING: redis unavailable ({type(e).__name__}: {e}); running degraded")
+            app.state.redis_status = "unavailable"
 
     @app.on_event("shutdown")
     async def shutdown_event():
