@@ -1,0 +1,51 @@
+name: aethelbuild-release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: pytest
+      - name: Secret scan (live keys must never ship)
+        run: |
+          if grep -rInE 'sk_live_|pk_live_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----' \
+              --exclude-dir=.git --exclude-dir=.venv --exclude='*.example' src tests infra scripts 2>/dev/null; then
+            echo "::error::credential pattern found — move to env.example/examples only"; exit 1
+          fi
+          echo "secret scan clean"
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source tarball
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          tar --exclude=.git --exclude=releases --exclude='*.tar.gz' -czf "aethelbuild-${GITHUB_REPOSITORY##*/}-${VER}.tar.gz" .
+          sha256sum "aethelbuild-${GITHUB_REPOSITORY##*/}-${VER}.tar.gz" > "aethelbuild-${GITHUB_REPOSITORY##*/}-${VER}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with: { name: source-tarball, path: aethelbuild-*.tar.gz* }
+  release:
+    needs: [test, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: source-tarball, path: artifacts }
+      - run: gh release create "$GITHUB_REF_NAME" artifacts/* --generate-notes
+        env: { GH_TOKEN: "${{ github.token }}" }
+  # docker: (optional) enable for Triton/vLLM image builds — GHCR or registry creds
+  #   needs: test
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - run: docker build -f infra/docker/Dockerfile.serving -t ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v} .
