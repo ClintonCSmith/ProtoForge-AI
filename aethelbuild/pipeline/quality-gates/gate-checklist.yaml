@@ -1,0 +1,50 @@
+# AethelBuild quality gates — release key (blueprint ATH-BLD-TPL-001 §6.1)
+# ab-release.sh refuses to tag unless every gate below is 'pass' AND its
+# evidence file exists relative to the repo root.
+project:
+  name: {{PROTOTYPE_NAME}}
+  version: 0.1.0
+
+gates:
+  g1:
+    id: G1
+    name: Architecture Review
+    status: pending          # pending | pass | fail
+    owner: delphi
+    evidence: docs/adr/
+    note: "Architecture matches blueprint; ADRs written for deviations"
+  g2:
+    id: G2
+    name: Functional Correctness
+    status: pending
+    owner: prometheus
+    evidence: docs/functional-report.md
+    note: "Vertical-slice E2E passes with synthetic data"
+  g3:
+    id: G3
+    name: Performance Baseline
+    status: pending
+    owner: prometheus
+    evidence: docs/performance.json
+    note: "P99 < 2s at 10 concurrent; baseline recorded"
+  g4:
+    id: G4
+    name: Security Scan
+    status: pending
+    owner: sentinel
+    evidence: docs/security-report.md
+    note: "No critical/high CVEs; semgrep clean; dependency audit clean"
+  g5:
+    id: G5
+    name: Compliance Check
+    status: pending
+    owner: aegis
+    evidence: docs/compliance.md
+    note: "No PII in logs; sanitization verified; cross-border flow documented"
+  g6:
+    id: G6
+    name: Handover Package
+    status: pending
+    owner: delphi
+    evidence: README.md
+    note: "README, deploy guide, architecture diagram, API docs, roadmap delivered"
