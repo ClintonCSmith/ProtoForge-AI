@@ -11,6 +11,7 @@ from langgraph.graph import StateGraph, END
 # Import async db session for saving progress
 from backend.database import engine
 from backend.models.models import Project, ProjectVersion, GeneratedAsset, ProjectStatus
+from backend.agents.core.celery_app import celery_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OrchestratorAgent")
@@ -34,6 +35,7 @@ class PipelineState(BaseModel):
     current_stage: str = "init"
     progress_pct: int = 0
     errors: Dict[str, str] = {}
+    retries: Dict[str, int] = {}
 
 # 2. Redis Pub/Sub Helper to send live progress updates to SSE
 async def publish_progress(job_id: str, stage: str, progress_pct: int, data: Optional[dict] = None, error: Optional[str] = None):
@@ -54,42 +56,64 @@ async def publish_progress(job_id: str, stage: str, progress_pct: int, data: Opt
         logger.error(f"Failed to publish progress to Redis: {e}")
 
 # Helper to wait for Celery task asynchronously without blocking the loop
-async def wait_for_celery_task(async_result) -> Any:
+async def wait_for_celery_task(async_result, timeout=300) -> Any:
     """
     Asynchronously poll a Celery task until it is ready,
     yielding execution to the event loop.
     """
+    start_time = asyncio.get_event_loop().time()
     while not async_result.ready():
-        await asyncio.sleep(0.5)
+        if asyncio.get_event_loop().time() - start_time > timeout:
+            raise TimeoutError("Celery task timed out")
+        await asyncio.sleep(1.0)
+    
     if async_result.failed():
-        raise RuntimeError(f"Celery task failed: {async_result.result or async_result.traceback}")
+        # Check if it was a real failure or a revoked task
+        state = async_result.state
+        raise RuntimeError(f"Celery task failed with state {state}: {async_result.result}")
+    
     return async_result.result
+
+async def execute_task_with_retry(task_func, job_id, *args, max_retries=3):
+    """
+    Helper to execute a celery task with exponential backoff retries at the orchestrator level.
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            async_res = task_func.delay(job_id, *args)
+            return await wait_for_celery_task(async_res)
+        except Exception as e:
+            last_error = e
+            wait_time = (2 ** attempt) + 1
+            logger.warning(f"Task {task_func.__name__} attempt {attempt+1} failed: {e}. Retrying in {wait_time}s...")
+            await asyncio.sleep(wait_time)
+    raise last_error
 
 # 3. Define the Node functions wrapping our Celery tasks
 async def parse_node(state: PipelineState) -> dict:
     logger.info(f"[{state.job_id}] Parse Node started")
     await publish_progress(state.job_id, "parse", 10)
     
-    from agents.intent_parser import parse_intent
+    from backend.agents.intent_parser.tasks import parse_intent
     try:
-        async_res = parse_intent.delay(state.job_id, {"text_prompt": state.prompt})
-        res = await wait_for_celery_task(async_res)
-        logger.info(f"[{state.job_id}] Parse Node complete: {res['spec']['product_name']}")
+        res = await execute_task_with_retry(parse_intent, state.job_id, {"text_prompt": state.prompt})
         await publish_progress(state.job_id, "parse", 20, data=res)
         return {"spec": res["spec"]}
     except Exception as e:
-        logger.error(f"[{state.job_id}] Parse Node failed: {e}")
+        logger.error(f"[{state.job_id}] Parse Node failed after retries: {e}")
         return {"errors": {"parse": str(e)}}
 
 async def draw_node(state: PipelineState) -> dict:
+    if "parse" in state.errors:
+        return {} # Skip if core dependency failed
+        
     logger.info(f"[{state.job_id}] Draw Node started")
     await publish_progress(state.job_id, "draw", 25)
     
-    from agents.drawing_generator import generate_drawing
+    from backend.agents.drawing_generator.tasks import generate_drawing
     try:
-        async_res = generate_drawing.delay(state.job_id, {"spec": state.spec, "standard": "ISO"})
-        res = await wait_for_celery_task(async_res)
-        await publish_asset(state.spec.get("product_name", "product"), "drawing_svg", res["drawing_svg_url"], state.spec)
+        res = await execute_task_with_retry(generate_drawing, state.job_id, {"spec": state.spec, "standard": "ISO"})
         await publish_progress(state.job_id, "draw", 35, data=res)
         return {"drawing": res}
     except Exception as e:
@@ -97,15 +121,15 @@ async def draw_node(state: PipelineState) -> dict:
         return {"errors": {"draw": str(e)}}
 
 async def model_node(state: PipelineState) -> dict:
+    if "parse" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] Model Node started")
     await publish_progress(state.job_id, "model", 40)
     
-    from agents.model_synthesizer import synthesize_model
+    from backend.agents.model_synthesizer.tasks import synthesize_model
     try:
-        async_res = synthesize_model.delay(state.job_id, {"spec": state.spec, "format_requested": "gltf"})
-        res = await wait_for_celery_task(async_res)
-        await publish_asset(state.spec.get("product_name", "product"), "gltf_cad", res["model_gltf_url"], state.spec)
-        await publish_asset(state.spec.get("product_name", "product"), "stl_mesh", res["model_stl_url"], state.spec)
+        res = await execute_task_with_retry(synthesize_model, state.job_id, {"spec": state.spec, "format_requested": "gltf"})
         await publish_progress(state.job_id, "model", 50, data=res)
         return {"model": res}
     except Exception as e:
@@ -113,17 +137,18 @@ async def model_node(state: PipelineState) -> dict:
         return {"errors": {"model": str(e)}}
 
 async def render_node(state: PipelineState) -> dict:
+    if not state.model or "model" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] Render Node started")
     await publish_progress(state.job_id, "render", 55)
     
-    from agents.render_engine import render_model
+    from backend.agents.render_engine.tasks import render_model
     try:
-        async_res = render_model.delay(state.job_id, {
-            "model_gltf_url": state.model.get("model_gltf_url", "") if state.model else "",
-            "color_preference": state.spec.get("color", "matte black")
+        res = await execute_task_with_retry(render_model, state.job_id, {
+            "model_gltf_url": state.model.get("model_gltf_url", ""),
+            "color_preference": state.spec.get("color", "matte black") if state.spec else "matte black"
         })
-        res = await wait_for_celery_task(async_res)
-        await publish_asset(state.spec.get("product_name", "product"), "front_render", res["front_iso_url"], state.spec)
         await publish_progress(state.job_id, "render", 65, data=res)
         return {"render": res}
     except Exception as e:
@@ -131,16 +156,17 @@ async def render_node(state: PipelineState) -> dict:
         return {"errors": {"render": str(e)}}
 
 async def animate_node(state: PipelineState) -> dict:
+    if not state.model or "model" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] Animate Node started")
     await publish_progress(state.job_id, "animate", 70)
     
-    from agents.animation_director import animate_model
+    from backend.agents.animation_director.tasks import animate_model
     try:
-        async_res = animate_model.delay(state.job_id, {
-            "model_gltf_url": state.model.get("model_gltf_url", "") if state.model else ""
+        res = await execute_task_with_retry(animate_model, state.job_id, {
+            "model_gltf_url": state.model.get("model_gltf_url", "")
         })
-        res = await wait_for_celery_task(async_res)
-        await publish_asset(state.spec.get("product_name", "product"), "animation_mp4", res["video_url"], state.spec)
         await publish_progress(state.job_id, "animate", 78, data=res)
         return {"animation": res}
     except Exception as e:
@@ -148,16 +174,17 @@ async def animate_node(state: PipelineState) -> dict:
         return {"errors": {"animate": str(e)}}
 
 async def xr_node(state: PipelineState) -> dict:
+    if not state.model or "model" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] XR Node started")
     await publish_progress(state.job_id, "xr", 80)
     
-    from agents.interactive_xr import create_xr_session
+    from backend.agents.interactive_xr.tasks import create_xr_session
     try:
-        async_res = create_xr_session.delay(state.job_id, {
-            "model_gltf_url": state.model.get("model_gltf_url", "") if state.model else ""
+        res = await execute_task_with_retry(create_xr_session, state.job_id, {
+            "model_gltf_url": state.model.get("model_gltf_url", "")
         })
-        res = await wait_for_celery_task(async_res)
-        await publish_asset(state.spec.get("product_name", "product"), "qr_code", res["qr_code_url"], state.spec)
         await publish_progress(state.job_id, "xr", 84, data=res)
         return {"xr_viewer": res}
     except Exception as e:
@@ -165,16 +192,17 @@ async def xr_node(state: PipelineState) -> dict:
         return {"errors": {"xr": str(e)}}
 
 async def simulate_node(state: PipelineState) -> dict:
+    if not state.model or "model" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] Simulate Node started")
     await publish_progress(state.job_id, "simulate", 85)
     
-    from agents.simulation import run_simulation
+    from backend.agents.simulation.tasks import run_simulation
     try:
-        async_res = run_simulation.delay(state.job_id, {
-            "model_stl_url": state.model.get("model_stl_url", "") if state.model else ""
+        res = await execute_task_with_retry(run_simulation, state.job_id, {
+            "model_stl_url": state.model.get("model_stl_url", "")
         })
-        res = await wait_for_celery_task(async_res)
-        await publish_asset(state.spec.get("product_name", "product"), "simulation_gltf", res["result_overlay_gltf_url"], state.spec)
         await publish_progress(state.job_id, "simulate", 89, data=res)
         return {"simulation": res}
     except Exception as e:
@@ -182,16 +210,18 @@ async def simulate_node(state: PipelineState) -> dict:
         return {"errors": {"simulate": str(e)}}
 
 async def bom_node(state: PipelineState) -> dict:
+    if not state.spec or "parse" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] BOM Node started")
     await publish_progress(state.job_id, "bom", 90)
     
-    from agents.bom_estimator import estimate_bom
+    from backend.agents.bom_estimator.tasks import estimate_bom
     try:
-        async_res = estimate_bom.delay(state.job_id, {
+        res = await execute_task_with_retry(estimate_bom, state.job_id, {
             "spec": state.spec,
             "model_gltf_url": state.model.get("model_gltf_url", "") if state.model else ""
         })
-        res = await wait_for_celery_task(async_res)
         await publish_progress(state.job_id, "bom", 94, data=res)
         return {"bom": res}
     except Exception as e:
@@ -199,30 +229,24 @@ async def bom_node(state: PipelineState) -> dict:
         return {"errors": {"bom": str(e)}}
 
 async def validate_node(state: PipelineState) -> dict:
+    if not state.drawing or "draw" in state.errors:
+        return {}
+        
     logger.info(f"[{state.job_id}] Validate Node started")
     await publish_progress(state.job_id, "validate", 95)
     
-    from agents.standards_validator import validate_drawing
+    from backend.agents.standards_validator.tasks import validate_drawing
     try:
-        drawing_pdf = state.drawing.get("drawing_pdf_url", "") if state.drawing else ""
-        async_res = validate_drawing.delay(state.job_id, {
+        drawing_pdf = state.drawing.get("drawing_pdf_url", "")
+        res = await execute_task_with_retry(validate_drawing, state.job_id, {
             "drawing_pdf_urls": [drawing_pdf] if drawing_pdf else [],
-            "product_type": state.spec.get("product_type", "Bracket")
+            "product_type": state.spec.get("product_type", "Bracket") if state.spec else "Bracket"
         })
-        res = await wait_for_celery_task(async_res)
         await publish_progress(state.job_id, "validate", 98, data=res)
         return {"validation": res}
     except Exception as e:
         logger.error(f"[{state.job_id}] Validate Node failed: {e}")
         return {"errors": {"validate": str(e)}}
-
-# Helper function to save generated assets to the DB
-async def publish_asset(part_name: str, asset_type: str, file_url: str, spec: Any):
-    try:
-        # DB publishing is decoupled so graph proceeds even on DB lag
-        pass
-    except Exception as e:
-        logger.error(f"Asset DB logging failed: {e}")
 
 # 4. Construct LangGraph Workflow
 def create_orchestrator_workflow() -> StateGraph:
@@ -240,6 +264,8 @@ def create_orchestrator_workflow() -> StateGraph:
     workflow.add_node("validate", validate_node)
     
     # Establish sequential flow
+    # We use edges that allow continuing even if previous nodes added errors to the state.
+    # The nodes themselves check state.errors for critical dependencies.
     workflow.set_entry_point("parse")
     workflow.add_edge("parse", "draw")
     workflow.add_edge("draw", "model")
@@ -254,20 +280,44 @@ def create_orchestrator_workflow() -> StateGraph:
     return workflow.compile()
 
 # 5. Pipeline Trigger Function
-async def run_pipeline(project_id: str, job_id: str, prompt: str):
+@celery_app.task(bind=True, max_retries=1)
+def run_pipeline_task(self, project_id: str, job_id: str, prompt: str):
+    """
+    Agent 12: OrchestratorAgent Celery task.
+    Entry point for the LangGraph design pipeline.
+    """
     logger.info(f"Triggering LangGraph pipeline for Project {project_id}, Job {job_id}")
     
-    app = create_orchestrator_workflow()
-    initial_state = PipelineState(
-        project_id=project_id,
-        job_id=job_id,
-        prompt=prompt
-    )
+    # We run the async LangGraph workflow within Celery's synchronous thread
+    import asyncio
     
+    async def _run():
+        app = create_orchestrator_workflow()
+        initial_state = PipelineState(
+            project_id=project_id,
+            job_id=job_id,
+            prompt=prompt
+        )
+        try:
+            # Persistent job state can be saved to PG here if needed
+            # For now we use the LangGraph in-memory state during the run
+            final_state = await app.ainvoke(initial_state)
+            
+            # Check for total failure
+            if len(final_state["errors"]) > 3: # Arbitrary threshold for "failed" pipeline
+                 await publish_progress(job_id, "failed", 0, error="Too many pipeline stage failures.")
+            else:
+                 await publish_progress(job_id, "complete", 100, data={"status": "completed", "errors": final_state["errors"]})
+            
+            logger.info(f"[{job_id}] LangGraph Pipeline finished with {len(final_state['errors'])} errors")
+        except Exception as e:
+            logger.error(f"[{job_id}] LangGraph Pipeline crashed: {e}")
+            await publish_progress(job_id, "failed", 0, error=str(e))
+            raise e
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        final_state = await app.ainvoke(initial_state)
-        await publish_progress(job_id, "complete", 100, data={"status": "completed"})
-        logger.info(f"[{job_id}] LangGraph Pipeline successfully completed!")
-    except Exception as e:
-        logger.error(f"[{job_id}] LangGraph Pipeline crashed: {e}")
-        await publish_progress(job_id, "failed", 0, error=str(e))
+        loop.run_until_complete(_run())
+    finally:
+        loop.close()

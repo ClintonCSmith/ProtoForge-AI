@@ -1,36 +1,314 @@
 rules:
-  - id: TITLE_BLOCK_COMPLETE
+  # ISO Standards (ISO 2768, ISO 128, ISO 1302, ISO 5456)
+  - id: ISO_TITLE_BLOCK_COMPLETE
     standard: ISO
     severity: error
-    description: Title block must contain part name, material, scale, date, and tolerances.
+    description: Title block must contain part name, material, scale, date, and ISO 2768 tolerance class.
     check_type: vision
-  - id: PROJECTION_CONSISTENCY
+    suggestion: Fill in all mandatory fields in the ISO title block template.
+  - id: ISO_FIRST_ANGLE_PROJECTION
     standard: ISO
     severity: error
-    description: All views must use first-angle projection.
+    description: All views must use first-angle projection symbol and layout.
     check_type: vision
-  - id: DIMENSION_COMPLETENESS
-    standard: ISO
-    severity: warning
-    description: All visible outer and inner features must be clearly dimensioned.
-    check_type: vision
-  - id: BORDER_MARGINS_VALID
-    standard: ISO
-    severity: info
-    description: Drawing frame margins must conform to standard A4/A3 layout grids.
-    check_type: metadata
-  - id: METRIC_UNITS_ONLY
+    suggestion: Flip view layout to first-angle and ensure the projection symbol is the truncated cone on the left.
+  - id: ISO_METRIC_UNITS
     standard: ISO
     severity: error
     description: All dimensions must be specified in millimeters (SI metric system).
     check_type: metadata
-  - id: LINE_WEIGHT_CONSISTENCY
+    suggestion: Convert all dimensions to millimeters.
+  - id: ISO_SURFACE_FINISH_SYMBOL
     standard: ISO
     severity: warning
-    description: Visible outlines must be thick, centerlines and extension lines thin.
+    description: Surface texture requirements must use ISO 1302 symbols (check mark).
     check_type: vision
-  - id: SCALE_RATIO_STANDARD
+    suggestion: Replace generic finish notes with ISO 1302 graphical symbols.
+  - id: ISO_LINE_CONVENTIONS
     standard: ISO
     severity: warning
-    description: Scales used must conform to standard ratios (e.g. 1:1, 1:2, 1:5, 2:1).
+    description: Continuous thick for visible, dashed for hidden, chain thin for centerlines.
+    check_type: vision
+    suggestion: Update line weights and types to match ISO 128-20.
+  - id: ISO_2768_TOLERANCE_CLASS
+    standard: ISO
+    severity: error
+    description: Tolerance class (f, m, c, v) must be specified per ISO 2768-1.
+    check_type: regex
+    suggestion: Add 'ISO 2768-m' or similar to the general tolerance note.
+  - id: ISO_GEOMETRIC_TOLERANCING
+    standard: ISO
+    severity: warning
+    description: Geometric specifications must follow ISO 1101 standards.
+    check_type: vision
+    suggestion: Ensure feature control frames use ISO-compliant symbols.
+  - id: ISO_SCREW_THREADS
+    standard: ISO
+    severity: error
+    description: External and internal threads must follow ISO 6410 convention.
+    check_type: vision
+    suggestion: Draw threads with continuous thick and continuous thin lines per ISO.
+  - id: ISO_SECTIONAL_VIEWS
+    standard: ISO
+    severity: warning
+    description: Section lines must be continuous thin at 45 degrees (ISO 128-40).
+    check_type: vision
+    suggestion: Adjust hatch pattern to 45-degree equidistant thin lines.
+  - id: ISO_DATUM_SYMBOL
+    standard: ISO
+    severity: error
+    description: Datum features must use the ISO triangle identifier.
+    check_type: vision
+    suggestion: Replace boxed datums with the ISO triangle-on-base symbol.
+  - id: ISO_WELD_SYMBOLS
+    standard: ISO
+    severity: warning
+    description: Welding symbols must follow ISO 2553.
+    check_type: vision
+    suggestion: Update weld symbols to use the elementary/supplementary ISO symbols.
+  - id: ISO_PAPER_SIZE_STANDARD
+    standard: ISO
+    severity: info
+    description: Drawing sheet must be a standard A-series size (A0, A1, A2, A3, A4).
     check_type: metadata
+    suggestion: Resize layout to fit standard ISO paper dimensions.
+  - id: ISO_REVISION_HISTORY
+    standard: ISO
+    severity: warning
+    description: Revision block must include rev letter, description, date, and initials.
+    check_type: regex
+    suggestion: Add a revision table to the top-right or above the title block.
+  - id: ISO_PROJECTION_SYMBOL_PLACEMENT
+    standard: ISO
+    severity: info
+    description: Projection symbol should be located near the title block.
+    check_type: vision
+    suggestion: Move the truncated cone symbol into the designated title block cell.
+  - id: ISO_ARROWHEAD_STYLE
+    standard: ISO
+    severity: info
+    description: Dimension arrowheads must be closed and filled (ISO 129-1).
+    check_type: vision
+    suggestion: Change open arrowheads to filled 30-degree closed triangles.
+
+  # ASME Standards (ASME Y14.5, Y14.1, Y14.2)
+  - id: ASME_THIRD_ANGLE_PROJECTION
+    standard: ASME
+    severity: error
+    description: All views must use third-angle projection symbol and layout.
+    check_type: vision
+    suggestion: Flip view layout to third-angle and ensure the projection symbol is the truncated cone on the right.
+  - id: ASME_UNIT_CONSISTENCY
+    standard: ASME
+    severity: error
+    description: Units must be consistent (decimal inches or millimeters) and match title block.
+    check_type: metadata
+    suggestion: Ensure all dimensions use the same unit system throughout the drawing.
+  - id: ASME_GDT_DATUMS
+    standard: ASME
+    severity: error
+    description: Datum reference frames (A, B, C) must be established and correctly labeled.
+    check_type: vision
+    suggestion: Use ASME datum feature symbols (capital letter in a square box).
+  - id: ASME_BASIC_DIMENSIONS
+    standard: ASME
+    severity: warning
+    description: Basic dimensions (boxed) must be used for features controlled by geometric tolerances.
+    check_type: vision
+    suggestion: Enclose theoretical exact dimensions in a rectangular frame.
+  - id: ASME_DUAL_DIMENSIONING
+    standard: ASME
+    severity: info
+    description: Dual dimensioning (in/mm) is permitted but primary unit must be clear.
+    check_type: metadata
+    suggestion: Format dual dimensions as primary [secondary] or primary/secondary.
+  - id: ASME_ALL_OVER_SYMBOL
+    standard: ASME
+    severity: info
+    description: Use the 'all over' circle symbol for profile tolerances if applicable.
+    check_type: vision
+    suggestion: Add a circle at the junction of the leader line for profile tolerances.
+  - id: ASME_DIAMETER_SYMBOL
+    standard: ASME
+    severity: error
+    description: Diameter symbol must precede the numerical value.
+    check_type: regex
+    suggestion: Move the 'Ø' symbol to the front of the dimension text.
+  - id: ASME_RADIUS_SYMBOL
+    standard: ASME
+    severity: error
+    description: Radius symbol 'R' must precede the numerical value.
+    check_type: regex
+    suggestion: Ensure 'R' is placed before the radius value.
+  - id: ASME_TEXT_ORIENTATION
+    standard: ASME
+    severity: warning
+    description: All dimension text should be horizontal (unidirectional) for readability.
+    check_type: vision
+    suggestion: Rotate aligned dimension text to be horizontal.
+  - id: ASME_DECIMAL_ZERO
+    standard: ASME
+    severity: warning
+    description: For inch dimensions, do not use a leading zero. For metric, use a leading zero.
+    check_type: regex
+    suggestion: Adjust leading zeros based on the active unit system (ASME Y14.5 rule).
+  - id: ASME_HOLE_CALLOUTS
+    standard: ASME
+    severity: warning
+    description: Holes must be specified with diameter, depth, and counterbore/countersink symbols.
+    check_type: vision
+    suggestion: Use ASME standard symbols for 'depth', 'counterbore', and 'countersink'.
+  - id: ASME_FONT_STYLE
+    standard: ASME
+    severity: info
+    description: Lettering should be uppercase Sans Serif (ASME Y14.2).
+    check_type: vision
+    suggestion: Change font to an ASME-compliant gothic or sans-serif style.
+  - id: ASME_TANGENT_EDGE_LINES
+    standard: ASME
+    severity: info
+    description: Tangent edges should be omitted or shown as thin lines.
+    check_type: vision
+    suggestion: Hide non-essential tangent edges to reduce clutter.
+  - id: ASME_CHAMFER_DIMENSIONING
+    standard: ASME
+    severity: info
+    description: Chamfers should be dimensioned by 'angle x distance' or 'distance x distance'.
+    check_type: vision
+    suggestion: Format chamfer callouts per ASME Y14.5 conventions.
+  - id: ASME_BORDES_AND_ZONES
+    standard: ASME
+    severity: warning
+    description: Drawing must have borders and grid zones (A, B, C... 1, 2, 3...).
+    check_type: vision
+    suggestion: Add a standard ASME border with alphanumeric zone markers.
+
+  # DIN Standards (DIN 406, DIN 7168, DIN 6784)
+  - id: DIN_MATERIAL_DESIGNATION
+    standard: DIN
+    severity: error
+    description: Material must be specified using DIN 17006/17007 standardized codes (e.g. AlMg3).
+    check_type: metadata
+    suggestion: Update material field to use the correct DIN 'Werkstoffnummer' or name.
+  - id: DIN_TOLERANCE_CODES
+    standard: DIN
+    severity: warning
+    description: Use DIN standard fit codes (e.g. H7/g6) for shaft/hole assemblies.
+    check_type: vision
+    suggestion: Apply standard DIN fit tolerances to mating features.
+  - id: DIN_EDGE_SPECIFICATION
+    standard: DIN
+    severity: info
+    description: Edge condition specifications must conform to DIN 6784.
+    check_type: metadata
+    suggestion: Add the DIN 6784 symbol and code to the edge requirement note.
+  - id: DIN_SURFACE_TEXT_DIN3141
+    standard: DIN
+    severity: warning
+    description: Surface finish should ideally follow DIN EN ISO 1302 (formerly DIN 3141).
+    check_type: vision
+    suggestion: Modernize surface finish symbols to the current ISO-harmonized DIN standard.
+  - id: DIN_DIMENSION_LINES
+    standard: DIN
+    severity: info
+    description: Dimension lines must be continuous thin (DIN 406).
+    check_type: vision
+    suggestion: Ensure dimension and extension lines follow DIN 406 weight rules.
+  - id: DIN_SIMPLIFIED_THREAD
+    standard: DIN
+    severity: warning
+    description: Use simplified representation for screw threads per DIN ISO 6410.
+    check_type: vision
+    suggestion: Update thread graphics to the simplified DIN convention.
+  - id: DIN_RECHTECK_BOX
+    standard: DIN
+    severity: error
+    description: Theoretical exact dimensions must be boxed (DIN EN ISO 1101).
+    check_type: vision
+    suggestion: Enclose reference/exact dimensions in a rectangular box.
+  - id: DIN_PART_LIST_PLACEMENT
+    standard: DIN
+    severity: warning
+    description: Parts list (Stückliste) should be placed above the title block.
+    check_type: vision
+    suggestion: Move the BOM table to sit directly on top of the title block per DIN convention.
+  - id: DIN_CENTER_MARK_SIZE
+    standard: DIN
+    severity: info
+    description: Center marks should extend 2-5mm beyond the feature edge.
+    check_type: vision
+    suggestion: Adjust center mark extension length to DIN standards.
+  - id: DIN_WELD_SEAM_REPRESENTATION
+    standard: DIN
+    severity: info
+    description: Weld seams should be represented per DIN EN ISO 2553.
+    check_type: vision
+    suggestion: Verify weld symbols match the current DIN EN ISO standard.
+  - id: DIN_PAPER_Z_FOLD
+    standard: DIN
+    severity: info
+    description: Large drawings should be folded to A4 per DIN 824.
+    check_type: metadata
+    suggestion: Ensure margins allow for Z-folding to A4 size.
+  - id: DIN_TOLERANCE_OF_FORM
+    standard: DIN
+    severity: error
+    description: Form and position tolerances must follow DIN EN ISO 1101.
+    check_type: vision
+    suggestion: Audit all GD&T symbols for compliance with the latest DIN/ISO standard.
+  - id: DIN_SURFACE_SAMPLING_LENGTH
+    standard: DIN
+    severity: warning
+    description: Surface finish symbols should include sampling length if critical.
+    check_type: vision
+    suggestion: Add the required numerical value for sampling length above the finish symbol.
+  - id: DIN_ARROWHEAD_ANGLE
+    standard: DIN
+    severity: info
+    description: Arrowheads should have a 15-90 degree opening (DIN 406).
+    check_type: vision
+    suggestion: Use 20-degree closed arrowheads for best DIN compliance.
+  - id: DIN_GENERAL_TOLERANCE_ISO2768
+    standard: DIN
+    severity: error
+    description: General tolerances must be specified as 'ISO 2768 - <class>'.
+    check_type: regex
+    suggestion: Add the ISO 2768 tolerance note to the drawing metadata.
+
+  # General GD&T and Manufacturing Rules
+  - id: POSITIONAL_TOLERANCE_VALID
+    standard: GLOBAL
+    severity: error
+    description: Hole patterns must have positional tolerances relative to datums.
+    check_type: vision
+    suggestion: Add a positional feature control frame to hole pattern callouts.
+  - id: OVER_DIMENSIONING_CHECK
+    standard: GLOBAL
+    severity: warning
+    description: Check for redundant/over-constrained dimensions (no double dimensioning).
+    check_type: logic
+    suggestion: Identify and remove duplicate dimensions or mark them as reference '(X)'.
+  - id: SCALE_RATIO_STANDARD
+    standard: GLOBAL
+    severity: warning
+    description: Scales used must conform to standard ratios (e.g. 1:1, 1:2, 1:5, 1:10).
+    check_type: metadata
+    suggestion: Select a standard scale ratio that fits the part on the page comfortably.
+  - id: FONT_READABILITY
+    standard: GLOBAL
+    severity: warning
+    description: Text height must be minimum 2.5mm (ISO) or 0.125" (ASME) for legibility.
+    check_type: vision
+    suggestion: Increase font size for all annotations and dimensions.
+  - id: TANGENT_POINT_CONTINUITY
+    standard: GLOBAL
+    severity: error
+    description: Arcs and lines must meet at tangent points unless otherwise specified.
+    check_type: geometric
+    suggestion: Correct the model or drawing to ensure tangency at feature junctions.
+  - id: HIDDEN_LINE_CLARITY
+    standard: GLOBAL
+    severity: warning
+    description: Hidden lines should be used sparingly or in separate sections for clarity.
+    check_type: vision
+    suggestion: Use sectional views instead of complex hidden line networks.

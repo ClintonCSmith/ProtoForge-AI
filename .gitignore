@@ -24,6 +24,19 @@ __pycache__/
 *.tfstate
 *.tfstate.backup
 
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime junk
+nohup.out
+test_touch
+*.log
+
+# Generated assets (runtime output)
+backend/assets/
+
 # OS files
 .DS_Store
 Thumbs.db

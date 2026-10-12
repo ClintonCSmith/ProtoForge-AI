@@ -91,11 +91,15 @@ async def trigger_generation(id: UUID, db: AsyncSession = Depends(get_db)):
     await db.refresh(project)
 
     # 3. Queue LangGraph orchestrator task asynchronously
-    # For now, we mock the trigger and return a job id
-    mock_job_id = str(uuid4())
+    from backend.agents.orchestrator.agent import run_pipeline_task
+    
+    job_id = str(uuid4())
+    # Delay the task execution
+    run_pipeline_task.delay(str(project.id), job_id, project.description or "No prompt provided")
+    
     return {
         "detail": "Generation pipeline triggered successfully",
-        "job_id": mock_job_id,
+        "job_id": job_id,
         "project_id": project.id,
         "status": project.status
     }

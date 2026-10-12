@@ -7,7 +7,21 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery(
     "protoforge_tasks",
     broker=REDIS_URL,
-    backend=REDIS_URL
+    backend=REDIS_URL,
+    include=[
+        "agents.intent_parser",
+        "agents.drawing_generator",
+        "agents.drawing_interpreter",
+        "agents.model_synthesizer",
+        "agents.render_engine",
+        "agents.animation_director",
+        "agents.interactive_xr",
+        "agents.simulation",
+        "agents.bom_estimator",
+        "agents.standards_validator",
+        "agents.self_evolution",
+        "agents.orchestrator.agent",
+    ]
 )
 
 # Celery Configuration

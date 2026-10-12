@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column, 
     String, 
     Integer, 
+    Boolean,
     ForeignKey, 
     DateTime, 
     Text, 
@@ -170,11 +171,37 @@ class Subscription(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
-    stripe_subscription_id = Column(String(255), unique=True, nullable=False, index=True)
-    status = Column(String(100), nullable=False)  # stripe status: active, trialing, canceled, etc.
-    current_period_start = Column(DateTime, nullable=False)
-    current_period_end = Column(DateTime, nullable=False)
+    plan = Column(String(50), nullable=False, default="free")
+    payfast_subscription_id = Column(String(255), nullable=True, unique=True, index=True)
+    payfast_token = Column(String(255), nullable=True)
+    status = Column(String(100), nullable=False, default="pending")
+    current_period_start = Column(DateTime, nullable=True)
+    current_period_end = Column(DateTime, nullable=True)
+    cancel_at_period_end = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("UserProfile", back_populates="subscriptions")
+
+
+class Invoice(Base):
+    __tablename__ = "invoices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    subscription_id = Column(UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True)
+    invoice_number = Column(String(50), unique=True, nullable=False, index=True)
+    plan_tier = Column(String(50), nullable=False)
+    amount_zar = Column(Integer, nullable=False)
+    currency = Column(String(3), default="ZAR")
+    status = Column(String(20), default="pending")
+    payment_method = Column(String(50), nullable=True)
+    payfast_payment_id = Column(String(255), nullable=True)
+    pdf_url = Column(String(1024), nullable=True)
+    due_date = Column(DateTime, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("UserProfile")
+    subscription = relationship("Subscription")
